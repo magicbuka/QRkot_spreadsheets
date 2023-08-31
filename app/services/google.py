@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import datetime as dt
 from typing import Tuple
 from aiogoogle import Aiogoogle
@@ -7,27 +8,44 @@ from app.core.config import settings
 DATETIME = "%Y/%m/%d %H:%M:%S"
 ROWS = 50
 COLUMNS = 5
+TITLE = 'Отчет от {}'
+
+BODY = dict(
+    properties=dict(
+        locale='ru_RU',
+    ),
+    sheets=[dict(properties=dict(
+        sheetType='GRID',
+        sheetId=0,
+        title='Лист1',
+        gridProperties=dict(
+            rowCount=ROWS,
+            columnCount=COLUMNS,
+        )
+    ))]
+)
+HEADER = [
+    ['Отчет от', ''],
+    ['Топ проектов по скорости закрытия'],
+    ['Название проекта', 'Время сбора', 'Описание']
+]
+SIZE_ERROR = (
+    'Передано больше данных, чем размер таблицы. '
+    'Передано: {rows} строк {columns} столбцов. '
+    'Таблица:  {ROWS} строк {COLUMNS} столбцов.'
+)
 
 
 async def spreadsheets_create(
-        aiogoogle: Aiogoogle
+        aiogoogle: Aiogoogle,
+        body=None
 ) -> Tuple[str, str]:
+    if body is None:
+        body = deepcopy(BODY)
+        body['properties']['title'] = TITLE.format(
+            date=dt.now().strftime(DATETIME)
+        )
     service = await aiogoogle.discover('sheets', 'v4')
-    body = dict(
-        properties=dict(
-            title=f'Отчет от {dt.now().strftime(DATETIME)}',
-            locale='ru_RU',
-        ),
-        sheets=[dict(properties=dict(
-            sheetType='GRID',
-            sheetId=0,
-            title='Лист1',
-            gridProperties=dict(
-                rowCount=ROWS,
-                columnCount=COLUMNS,
-            )
-        ))]
-    )
     response = await aiogoogle.as_service_account(
         service.spreadsheets.create(json=body)
     )
@@ -59,26 +77,36 @@ async def spreadsheets_update_value(
     aiogoogle: Aiogoogle
 ) -> None:
     service = await aiogoogle.discover('sheets', 'v4')
-    values = [
-        ['Отчет от', dt.now().strftime(DATETIME)],
-        ['Топ проектов по скорости закрытия'],
-        ['Название проекта', 'Время сбора', 'Описание']
+    projects_values = sorted((
+        (
+            project.name,
+            project.close_date - project.create_date,
+            project.description
+        ) for project in charity_projects
+    ), key=lambda object: object[1])
+    header = deepcopy(HEADER)
+    header[0][1] = str(dt.now().strftime(DATETIME))
+    table_values = [
+        *header,
+        *[list(map(str, field)) for field in projects_values],
     ]
-    for project in charity_projects:
-        row = [
-            str(project.name),
-            str(project.close_date - project.create_date),
-            str(project.description)
-        ]
-        values.append(row)
+    rows = len(table_values)
+    columns = len(max(header, key=len))
+    if rows > ROWS or columns > COLUMNS:
+        raise ValueError(
+            SIZE_ERROR.format(
+                rows=rows,
+                columns=columns
+            ),
+        )
     await aiogoogle.as_service_account(
         service.spreadsheets.values.update(
             spreadsheetId=spreadsheet_id,
-            range='A1:E30',
+            range=f'R1C1:R{rows}C{columns}',
             valueInputOption='USER_ENTERED',
             json={
                 'majorDimension': 'ROWS',
-                'values': values
+                'values': table_values
             },
         )
     )
